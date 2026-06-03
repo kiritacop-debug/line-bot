@@ -2,7 +2,8 @@ const express = require('express');
 const line = require('@line/bot-sdk');
 
 const config = {
-  channelAccessToken: 'YVF2VpNmOJ2K4iccp590y9HAQ6GAUurAO3tQ2dBg60A05nFevJFoStf+tPt432nVzTaQFLuEnh1XdV+M93OQcE2aV0rV+BYjKsQ4T862WUahoZAsC8X+iVd7KAXgHiIdYfbj/94ChZdwkwUD3A+hfgdB04t89/1O/w1cDnyilFU='
+  channelAccessToken: 'YVF2VpNmOJ2K4iccp590y9HAQ6GAUurAO3tQ2dBg60A05nFevJFoStf+tPt432nVzTaQFLuEnh1XdV+M93OQcE2aV0rV+BYjKsQ4T862WUahoZAsC8X+iVd7KAXgHiIdYfbj/94ChZdwkwUD3A+hfgdB04t89/1O/w1cDnyilFU=',
+  channelSecret: '5ed7ad9c666564003f28b7d86b1f8185'
 };
 
 const app = express();
