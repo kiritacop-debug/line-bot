@@ -6,16 +6,21 @@ app.use(express.json());
 
 // 1. Slackからの発言（受信）＆ OpenAIによる双方向対話ルート
 app.post('/slack/events', async (req, res) => {
-    // Slackの接続テスト（challenge認証）を秒速でクリアする最強の防壁
+    // Slackの接続テスト（challenge認証）を秒速でクリア
     if (req.body.challenge) {
         return res.status(200).send(req.body.challenge);
     }
 
+    // 【最強の防壁】Slackの無限リトライをこの1行で即座に強制停止させる
+    res.status(200).send('OK');
+
     try {
         const { event } = req.body;
-        // ボット自身の発言による無限ループを徹底防御
-        if (event && event.type === 'message' && !event.bot_id) {
-            const userText = event.text.trim();
+        
+        // ダイレクトメッセージ(im)またはチャンネル発言を検知し、ボット自身の発言は徹底防御
+        if (event && (event.type === 'message' || event.type === 'app_mention') && !event.bot_id) {
+            const userText = event.text ? event.text.trim() : "";
+            if (!userText) return;
 
             // OpenAI (ChatGPT) が野口代表の指示を受けて思考を開始
             if (process.env.OPENAI_API_KEY) {
@@ -40,10 +45,9 @@ app.post('/slack/events', async (req, res) => {
                 }
             }
         }
-        res.status(200).send('OK');
     } catch (error) {
-        console.error('【Slackイベントエラー】:', error.message);
-        res.status(200).send('OK');
+        // 万が一エラーが起きてもログに吐き出すだけで、Slackにはエラーを絶対に見せない
+        console.error('【内部通信エラー（制限中またはキー不備）】:', error.message);
     }
 });
 
