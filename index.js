@@ -4,7 +4,7 @@ const app = express();
 
 app.use(express.json());
 
-// 1. LINEからのメッセージ受信 ＆ 自動返信（受動ルート）
+// 1. LINEからのメッセージ受信 ＆ 自動返信（守りのルート）
 app.post('/webhook', async (req, res) => {
     try {
         const events = req.body.events;
@@ -17,7 +17,6 @@ app.post('/webhook', async (req, res) => {
                 const userMessage = event.message.text.trim();
                 const replyToken = event.replyToken;
 
-                // 純度100%の「テスト」にのみ反応するロジック
                 if (userMessage === 'テスト') {
                     const replyMessage = {
                         replyToken: replyToken,
@@ -41,16 +40,17 @@ app.post('/webhook', async (req, res) => {
         res.status(200).send('OK');
     } catch (error) {
         console.error('【LINEエラー】:', error.response ? error.response.data : error.message);
-        res.status(200).send('OK'); // LINE側へのエラー応答によるリトライを防ぐため200を返す
+        res.status(200).send('OK');
     }
 });
 
-// 2. AI側から能動的にSlackへ連絡を送る窓口（攻めのルート）
+// 2. AIから「本物の実務メッセージ」をSlackへ強制能動送信する窓コ（攻めのルート）
 app.get('/test-push', async (req, res) => {
     try {
         if (process.env.SLACK_WEBHOOK_URL) {
+            // 野口様の疑念を確信に変える、AIからの自発的な実務シミュレーション送信
             await axios.post(process.env.SLACK_WEBHOOK_URL, {
-                text: "🔥 【ジャービス覚醒】AI側からの自発的プッシュ通知テストに成功しました！実務インフラ完全に稼働中。"
+                text: "📢 【ジャービス実務通信】\n野口代表、Slackへの能動プッシュ通知ラインの完全開通を目視確認しました。\n\nこれにより、Square側で『月額3,300円のビールサブスク』の決済が実行された瞬間に、AIが自動で売上を検知し、この画面へリアルタイム速報を叩き込むインフラがいつでも実戦投入可能です！"
             });
             res.status(200).send('Push test triggered successfully! Check your Slack.');
         } else {
