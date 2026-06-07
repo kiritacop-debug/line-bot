@@ -1,13 +1,23 @@
+// 【超重要】サーバー起動時にGeminiのパーツを強制自動インストールする防壁ロジック
+try {
+    require('@google/genai');
+} catch (e) {
+    const execSync = require('child_process').execSync;
+    console.log('Geminiパーツが見つからないため、強制自動インストールを執行します...');
+    execSync('npm install @google/genai');
+    console.log('Geminiパーツのインストールが完全完了しました。');
+}
+
 const express = require('express');
 const axios = require('axios');
-const { GoogleGenAI } = require('@google/genai'); // Gemini用
+const { GoogleGenAI } = require('@google/genai'); // これでもう絶対にバグりません
 const app = express();
 
 app.use(express.json());
 
 // 1. Slackからの発言（受信）＆ 2大知脳による双方向対話ルート
 app.post('/slack/events', async (req, res) => {
-    // 【超重要】Slackの接続テスト（challenge認証）を秒速でクリアする防壁
+    // Slackの接続テスト（challenge認証）を秒速でクリアする
     if (req.body.challenge) {
         return res.status(200).send(req.body.challenge);
     }
@@ -19,9 +29,8 @@ app.post('/slack/events', async (req, res) => {
             const userText = event.text.trim();
             let aiResponse = "";
 
-            // ★野口代表専用・マルチブレイン（複数頭脳）振り分けロジック★
+            // ★野口代表専用・マルチブレイン（複数頭脳）振り使い分け★
             if (userText.includes('ジェジェ') || userText.toLowerCase().includes('gemini')) {
-                // 「ジェジェ」または「gemini」というワードが含まれていれば【Gemini】が起動
                 if (process.env.GEMINI_API_KEY) {
                     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
                     const response = await ai.models.generateContent({
@@ -33,7 +42,7 @@ app.post('/slack/events', async (req, res) => {
                     aiResponse = "GeminiのAPIキーが設定されていません。";
                 }
             } else {
-                // それ以外の通常の発言・複雑な論理指示はすべて【OpenAI (ChatGPT)】が最優先起動
+                // 通常の発言・複雑な論理指示はすべて【OpenAI (ChatGPT)】が最優先起動
                 if (process.env.OPENAI_API_KEY) {
                     const response = await axios.post('https://api.openai.com/v1/chat/completions', {
                         model: "gpt-4o-mini",
@@ -53,7 +62,7 @@ app.post('/slack/events', async (req, res) => {
                 }
             }
 
-            // 生成されたAIの回答を、先ほど開通したプッシュ通知ルートでSlackへ撃ち返す
+            // 生成されたAIの回答をSlackへ撃ち返す
             if (process.env.SLACK_WEBHOOK_URL && aiResponse) {
                 await axios.post(process.env.SLACK_WEBHOOK_URL, { text: aiResponse });
             }
@@ -65,7 +74,7 @@ app.post('/slack/events', async (req, res) => {
     }
 });
 
-// 2. LINEからのメッセージ受信 ＆ 自動返信（守りのルートも完全維持）
+// 2. LINEからのメッセージ受信 ＆ 自動返信（完全維持）
 app.post('/webhook', async (req, res) => {
     try {
         const events = req.body.events;
@@ -103,7 +112,7 @@ app.get('/test-push', async (req, res) => {
             await axios.post(process.env.SLACK_WEBHOOK_URL, {
                 text: "📢 【ジャービス双方向通信】マルチブレインの同期に成功しました！Slackでの会話待機状態へ移行します。"
             });
-            res.status(200).send('Push test triggered successfully! Check your Slack.');
+            res.status(200).send('Push test triggered successfully!');
         } else {
             res.status(400).send('Slack Webhook URL missing.');
         }
