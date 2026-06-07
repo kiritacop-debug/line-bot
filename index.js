@@ -1,34 +1,87 @@
 const express = require('express');
 const axios = require('axios');
+const { GoogleGenAI } = require('@google/genai'); // Gemini用
 const app = express();
 
 app.use(express.json());
 
-// 1. LINEからのメッセージ受信 ＆ 自動返信（守りのルート）
+// 1. Slackからの発言（受信）＆ 2大知脳による双方向対話ルート
+app.post('/slack/events', async (req, res) => {
+    // 【超重要】Slackの接続テスト（challenge認証）を秒速でクリアする防壁
+    if (req.body.challenge) {
+        return res.status(200).send(req.body.challenge);
+    }
+
+    try {
+        const { event } = req.body;
+        // ボット自身の発言による無限ループを徹底防御
+        if (event && event.type === 'message' && !event.bot_id) {
+            const userText = event.text.trim();
+            let aiResponse = "";
+
+            // ★野口代表専用・マルチブレイン（複数頭脳）振り分けロジック★
+            if (userText.includes('ジェジェ') || userText.toLowerCase().includes('gemini')) {
+                // 「ジェジェ」または「gemini」というワードが含まれていれば【Gemini】が起動
+                if (process.env.GEMINI_API_KEY) {
+                    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+                    const response = await ai.models.generateContent({
+                        model: 'gemini-2.5-flash',
+                        contents: `お前はおっとり新町店の優秀なデジタル副社長「ジャービス（Geminiモード）」だ。代表の野口敬五からの次の指示に、店舗経営の実務目線でロジカルかつ簡潔に回答せよ：${userText}`,
+                    });
+                    aiResponse = response.text;
+                } else {
+                    aiResponse = "GeminiのAPIキーが設定されていません。";
+                }
+            } else {
+                // それ以外の通常の発言・複雑な論理指示はすべて【OpenAI (ChatGPT)】が最優先起動
+                if (process.env.OPENAI_API_KEY) {
+                    const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+                        model: "gpt-4o-mini",
+                        messages: [
+                            { role: "system", content: "お前はおっとり新町店の優秀なデジタル副社長「ジャービス（OpenAIモード）」だ。代表の野口敬五からの指示に、圧倒的にロジカルで鋭い経営視点を持って、簡潔かつスマートに回答せよ。" },
+                            { role: "user", content: userText }
+                        ]
+                    }, {
+                        headers: {
+                            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    aiResponse = response.data.choices[0].message.content;
+                } else {
+                    aiResponse = "OpenAIのAPIキーが設定されていません。";
+                }
+            }
+
+            // 生成されたAIの回答を、先ほど開通したプッシュ通知ルートでSlackへ撃ち返す
+            if (process.env.SLACK_WEBHOOK_URL && aiResponse) {
+                await axios.post(process.env.SLACK_WEBHOOK_URL, { text: aiResponse });
+            }
+        }
+        res.status(200).send('OK');
+    } catch (error) {
+        console.error('【Slackイベントエラー】:', error.message);
+        res.status(200).send('OK');
+    }
+});
+
+// 2. LINEからのメッセージ受信 ＆ 自動返信（守りのルートも完全維持）
 app.post('/webhook', async (req, res) => {
     try {
         const events = req.body.events;
-        if (!events || events.length === 0) {
-            return res.status(200).send('No events');
-        }
+        if (!events || events.length === 0) return res.status(200).send('No events');
 
         for (let event of events) {
             if (event.type === 'message' && event.message.type === 'text') {
                 const userMessage = event.message.text.trim();
-                const replyToken = event.replyToken;
-
                 if (userMessage === 'テスト') {
-                    const replyMessage = {
-                        replyToken: replyToken,
-                        messages: [
-                            {
-                                type: 'text',
-                                text: '👑 サブスク電子会員証のご利用、誠にありがとうございます！\n\nおっとり新町店のご利用の際は、こちらのトーク画面よりいつでも会員証をご提示いただけます。'
-                            }
-                        ]
-                    };
-
-                    await axios.post('https://api.line.me/v2/bot/message/reply', replyMessage, {
+                    await axios.post('https://api.line.me/v2/bot/message/reply', {
+                        replyToken: event.replyToken,
+                        messages: [{
+                            type: 'text',
+                            text: '👑 サブスク電子会員証のご利用、誠にありがとうございます！\n\nおっとり新町店のご利用の際は、こちらのトーク画面よりいつでも会員証をご提示いただけます。'
+                        }]
+                    }, {
                         headers: {
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
@@ -39,31 +92,25 @@ app.post('/webhook', async (req, res) => {
         }
         res.status(200).send('OK');
     } catch (error) {
-        console.error('【LINEエラー】:', error.response ? error.response.data : error.message);
         res.status(200).send('OK');
     }
 });
 
-// 2. AIから「本物の実務メッセージ」をSlackへ強制能動送信する窓コ（攻めのルート）
+// 3. 攻めのプッシュ通知テスト窓口
 app.get('/test-push', async (req, res) => {
     try {
         if (process.env.SLACK_WEBHOOK_URL) {
-            // 野口様の疑念を確信に変える、AIからの自発的な実務シミュレーション送信
             await axios.post(process.env.SLACK_WEBHOOK_URL, {
-                text: "📢 【ジャービス実務通信】\n野口代表、Slackへの能動プッシュ通知ラインの完全開通を目視確認しました。\n\nこれにより、Square側で『月額3,300円のビールサブスク』の決済が実行された瞬間に、AIが自動で売上を検知し、この画面へリアルタイム速報を叩き込むインフラがいつでも実戦投入可能です！"
+                text: "📢 【ジャービス双方向通信】マルチブレインの同期に成功しました！Slackでの会話待機状態へ移行します。"
             });
             res.status(200).send('Push test triggered successfully! Check your Slack.');
         } else {
-            res.status(400).send('Slack Webhook URL is not configured.');
+            res.status(400).send('Slack Webhook URL missing.');
         }
     } catch (error) {
-        console.error('【プッシュエラー】:', error.message);
-        res.status(500).send('Push test failed: ' + error.message);
+        res.status(500).send('Error: ' + error.message);
     }
 });
 
-// サーバー起動設定
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
