@@ -6,21 +6,24 @@ app.use(express.json());
 
 // 1. Slackからの発言（受信）＆ OpenAIによる双方向対話ルート
 app.post('/slack/events', async (req, res) => {
-    // Slackの接続テスト（challenge認証）を秒速でクリア
+    // Slackの接続テスト（challenge認証）
     if (req.body.challenge) {
         return res.status(200).send(req.body.challenge);
     }
 
-    // 【最強の防壁】Slackの無限リトライをこの1行で即座に強制停止させる
+    // Slackのリトライ爆撃をその場で即座に強制停止
     res.status(200).send('OK');
 
     try {
         const { event } = req.body;
         
-        // ダイレクトメッセージ(im)またはチャンネル発言を検知し、ボット自身の発言は徹底防御
-        if (event && (event.type === 'message' || event.type === 'app_mention') && !event.bot_id) {
-            const userText = event.text ? event.text.trim() : "";
-            if (!userText) return;
+        // 【超高感度フィルター】ボット自身の発言以外は、イベントの型を問わず文字があれば全て脳みそへ送る
+        if (event && !event.bot_id && !event.bot_profile) {
+            // event.text が無い場合、event.message.text など別階層にある文字も執念で拾い上げる
+            const userText = event.text || (event.message && event.message.text) || "";
+            const cleanText = userText.trim();
+            
+            if (!cleanText) return;
 
             // OpenAI (ChatGPT) が野口代表の指示を受けて思考を開始
             if (process.env.OPENAI_API_KEY) {
@@ -28,7 +31,7 @@ app.post('/slack/events', async (req, res) => {
                     model: "gpt-4o-mini",
                     messages: [
                         { role: "system", content: "お前はおっとり新町店の優秀なデジタル副社長「ジャービス」だ。代表の野口敬五からの指示に、圧倒的にロジカルで鋭い経営視点を持って、簡潔かつスマートに回答せよ。" },
-                        { role: "user", content: userText }
+                        { role: "user", content: cleanText }
                     ]
                 }, {
                     headers: {
@@ -39,15 +42,14 @@ app.post('/slack/events', async (req, res) => {
 
                 const aiResponse = response.data.choices[0].message.content;
 
-                // 生成されたAIの回答をSlackへ撃ち返す
+                // 生成されたAIの回答をSlackの最新Webhook URLへ撃ち返す
                 if (process.env.SLACK_WEBHOOK_URL && aiResponse) {
                     await axios.post(process.env.SLACK_WEBHOOK_URL, { text: aiResponse });
                 }
             }
         }
     } catch (error) {
-        // 万が一エラーが起きてもログに吐き出すだけで、Slackにはエラーを絶対に見せない
-        console.error('【内部通信エラー（制限中またはキー不備）】:', error.message);
+        console.error('【通信エラー】:', error.message);
     }
 });
 
