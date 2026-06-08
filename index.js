@@ -62,6 +62,7 @@ ${input}
 const roles = {
   openai: "経営戦略の総責任者",
   claude: "論理・リスク分析の専門家",
+  gemini: "大局分析・長期トレンドの専門家"
 };
 
 /**
@@ -96,20 +97,26 @@ app.post("/slack/events", async (req, res) => {
     return res.sendStatus(200);
   }
 
-  await sendToSlack("🧠 AI合議中（OpenAI + Claude）...");
+  await sendToSlack("🧠 AI合議中（OpenAI + Claude + Gemini）...");
 
   try {
-    const [openai, claude] = await Promise.all([
+    // ⚙️ 修正箇所：Gemini（callGemini）も並列で同時に叩き起こす
+    const [openai, claude, gemini] = await Promise.all([
       callOpenAI(userMessage),
       callClaude(userMessage),
+      callGemini(userMessage),
     ]);
 
+    // ⚙️ 修正箇所：3人の見解をすべて1つの書類にガッチャンコする
     const combined = `
-【戦略】
-${openai}
+【戦略（OpenAI）】
+${openai || "不参加"}
 
-【論理】
-${claude}
+【論理（Claude）】
+${claude || "不参加"}
+
+【大局（Gemini）】
+${gemini || "不参加"}
 `;
 
     const finalReport = await callFinalSummarizer(combined);
@@ -117,7 +124,7 @@ ${claude}
     setCache(userMessage, finalReport);
     saveLog(userMessage, finalReport);
 
-    await sendToSlack(`📊 *AI合議制 上申書*\n\n${finalReport}`);
+    await sendToSlack(`📊 *AI合議制 上申書（3傑体制）*\n\n${finalReport}`);
 
     res.sendStatus(200);
   } catch (err) {
@@ -199,6 +206,33 @@ const callClaude = (input) =>
     ).then((res) => res.data.content?.[0]?.text || "")
   );
 
+// ⚙️ 新規追加：Gemini（AQキーを使用する公式通信処理）
+const callGemini = (input) =>
+  safe(() =>
+    withTimeout(
+      axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        {
+          contents: [
+            {
+              parts: [
+                {
+                  text: createPrompt(roles.gemini, input),
+                },
+              ],
+            },
+          ],
+        },
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      ),
+      8000
+    ).then((res) => res.data.candidates?.[0]?.content?.parts?.[0]?.text || "")
+  );
+
 /**
  * =========================================================
  * 最終統合
@@ -214,7 +248,7 @@ const callFinalSummarizer = async (input) => {
         {
           role: "system",
           content:
-            "あなたはCEOの参謀です。必ず1つの意思決定にまとめてください。",
+            "あなたはCEOの参謀です。提出された各AI専門家の見解（OpenAI、Claude、Gemini）を厳密に査読し、必ず1つの意思決定にまとめてください。回答内で、それぞれのAIがどのような視点をもたらしたかも軽く言及してください。",
         },
         {
           role: "user",
@@ -226,9 +260,10 @@ ${input}
 出力形式：
 ① 結論
 ② 採用戦略（1つ）
-③ 理由
-④ リスクと対策
-⑤ 明日のアクション（3つ）
+③ 各AIブレインの見解要約（OpenAI、Claude、Geminiの3人分）
+④ 理由
+⑤ リスクと対策
+⑥ 明日のアクション（3つ）
 `,
         },
       ],
