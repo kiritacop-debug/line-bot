@@ -9,9 +9,7 @@ app.use(express.json());
  * 共通処理
  * ============================
  */
-// APIキー確認
 const hasKey = (key) => key && key !== "" && key !== "undefined";
-// 落ちても止めない
 const safeCall = async (fn, name) => {
   try {
     return await fn();
@@ -22,50 +20,79 @@ const safeCall = async (fn, name) => {
 };
 /**
  * ============================
- * 役割プロンプト
+ * モード定義
  * ============================
  */
-const buildPrompt = (role, userInput) => {
-  switch (role) {
-    case "Claude":
-      return `あなたはリスク分析の専門家。失敗要因と回避策を中心に答えよ。\n${userInput}`;
-    case "Gemini":
-      return `あなたは市場分析の専門家。トレンドと将来性を踏まえて答えよ。\n${userInput}`;
-    case "Perplexity":
-      return `事実ベースで現実的に答えよ。\n${userInput}`;
-    case "Cohere":
-      return `売れる言葉・キャッチコピー重視で答えよ。\n${userInput}`;
-    case "Mistral":
-      return `最も論理的な結論を導け。\n${userInput}`;
-    case "Groq":
-      return `スピード重視で結論ファーストで答えよ。\n${userInput}`;
+const MODE = {
+  STRATEGY: "経営",
+  CREATIVE: "販促",
+  MARKET: "市場",
+  INVEST: "投資",
+  BUSINESS: "事業",
+  EDUCATION: "教育"
+};
+/**
+ * ============================
+ * モード判定
+ * ============================
+ */
+const detectMode = (input) => {
+  if (input.startsWith("販促")) return MODE.CREATIVE;
+  if (input.startsWith("市場")) return MODE.MARKET;
+  if (input.startsWith("投資")) return MODE.INVEST;
+  if (input.startsWith("事業")) return MODE.BUSINESS;
+  if (input.startsWith("教育")) return MODE.EDUCATION;
+  return MODE.STRATEGY;
+};
+/**
+ * ============================
+ * プロンプト生成
+ * ============================
+ */
+const buildPrompt = (role, mode, input) => {
+  switch (mode) {
+    case MODE.CREATIVE:
+      return `あなたは飲食店のトップマーケターです。売れるPOP・キャッチコピーを作成してください。\n${input}`;
+    case MODE.MARKET:
+      return `市場分析の専門家として、最新トレンドと今後の動きを分析してください。\n${input}`;
+    case MODE.INVEST:
+      return `投資家として、リスクとリターンを踏まえた判断をしてください。\n${input}`;
+    case MODE.BUSINESS:
+      return `新規事業の戦略家として、拡張性と収益性を重視して提案してください。\n${input}`;
+    case MODE.EDUCATION:
+      return `経営を学ぶ人に対して、理論と具体例でわかりやすく教えてください。\n${input}`;
     default:
-      return `飲食店経営として最適な判断をせよ。\n${userInput}`;
+      // STRATEGY
+      if (role === "Claude") {
+        return `リスク分析の専門家として、失敗要因と回避策を示せ。\n${input}`;
+      }
+      if (role === "Gemini") {
+        return `市場と将来性を踏まえて戦略を分析せよ。\n${input}`;
+      }
+      return `飲食店経営として最適な戦略を提示せよ。\n${input}`;
   }
 };
 /**
  * ============================
- * 各AI（7神）
+ * AI呼び出し（7神）
  * ============================
  */
-// OpenAI（必須）
 const callOpenAI = async (prompt) => {
   if (!hasKey(process.env.OPENAI_API_KEY)) return null;
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-    }),
+      messages: [{ role: "user", content: prompt }]
+    })
   });
   const data = await res.json();
   return data.choices?.[0]?.message?.content || null;
 };
-// Claude
 const callClaude = async (prompt) => {
   if (!hasKey(process.env.ANTHROPIC_API_KEY)) return null;
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -73,18 +100,17 @@ const callClaude = async (prompt) => {
     headers: {
       "x-api-key": process.env.ANTHROPIC_API_KEY,
       "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       model: "claude-3-haiku-20240307",
       max_tokens: 1000,
-      messages: [{ role: "user", content: prompt }],
-    }),
+      messages: [{ role: "user", content: prompt }]
+    })
   });
   const data = await res.json();
   return data.content?.[0]?.text || null;
 };
-// Gemini
 const callGemini = async (prompt) => {
   if (!hasKey(process.env.GEMINI_API_KEY)) return null;
   const res = await fetch(
@@ -93,85 +119,81 @@ const callGemini = async (prompt) => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-      }),
+        contents: [{ parts: [{ text: prompt }] }]
+      })
     }
   );
   const data = await res.json();
   return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
 };
-// Groq
 const callGroq = async (prompt) => {
   if (!hasKey(process.env.GROQ_API_KEY)) return null;
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       model: "llama3-70b-8192",
-      messages: [{ role: "user", content: prompt }],
-    }),
+      messages: [{ role: "user", content: prompt }]
+    })
   });
   const data = await res.json();
   return data.choices?.[0]?.message?.content || null;
 };
-// Perplexity
 const callPerplexity = async (prompt) => {
   if (!hasKey(process.env.PERPLEXITY_API_KEY)) return null;
   const res = await fetch("https://api.perplexity.ai/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.PERPLEXITY_API_KEY}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       model: "sonar-medium-chat",
-      messages: [{ role: "user", content: prompt }],
-    }),
+      messages: [{ role: "user", content: prompt }]
+    })
   });
   const data = await res.json();
   return data.choices?.[0]?.message?.content || null;
 };
-// Cohere
 const callCohere = async (prompt) => {
   if (!hasKey(process.env.COHERE_API_KEY)) return null;
   const res = await fetch("https://api.cohere.ai/v1/generate", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.COHERE_API_KEY}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       model: "command",
       prompt: prompt,
-      max_tokens: 500,
-    }),
+      max_tokens: 500
+    })
   });
   const data = await res.json();
   return data.generations?.[0]?.text || null;
 };
-// Mistral
 const callMistral = async (prompt) => {
   if (!hasKey(process.env.MISTRAL_API_KEY)) return null;
   const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       model: "mistral-medium",
-      messages: [{ role: "user", content: prompt }],
-    }),
+      messages: [{ role: "user", content: prompt }]
+    })
   });
   const data = await res.json();
   return data.choices?.[0]?.message?.content || null;
 };
 /**
  * ============================
- * ジャービス（意思決定エンジン）
+ * ジャービス（最終意思決定）
  * ============================
  */
 const callJarvis = async (inputs) => {
@@ -183,13 +205,13 @@ const callJarvis = async (inputs) => {
 【ルール】
 ・要約禁止
 ・並列禁止
-・最も合理的なもののみ採用
-・不要な意見は切り捨てる
+・最適解のみ抽出
+・不要は排除
 【出力】
-① 結論（唯一の戦略）
-② 採用理由
-③ 実行手順（即実行レベル）
-④ 却下した意見と理由
+① 結論
+② 理由
+③ 実行手順
+④ 捨てた意見と理由
 【意見】
 ${valid}
 `;
@@ -201,20 +223,22 @@ ${valid}
  * ============================
  */
 app.post("/webhook", async (req, res) => {
-  const userInput = req.body.message || "売上を伸ばす方法";
+  const userInput = req.body.message || "売上を上げる方法";
+  const mode = detectMode(userInput);
   const results = await Promise.all([
-    safeCall(() => callOpenAI(buildPrompt("OpenAI", userInput)), "OpenAI"),
-    safeCall(() => callClaude(buildPrompt("Claude", userInput)), "Claude"),
-    safeCall(() => callGemini(buildPrompt("Gemini", userInput)), "Gemini"),
-    safeCall(() => callGroq(buildPrompt("Groq", userInput)), "Groq"),
-    safeCall(() => callPerplexity(buildPrompt("Perplexity", userInput)), "Perplexity"),
-    safeCall(() => callCohere(buildPrompt("Cohere", userInput)), "Cohere"),
-    safeCall(() => callMistral(buildPrompt("Mistral", userInput)), "Mistral"),
+    safeCall(() => callOpenAI(buildPrompt("OpenAI", mode, userInput)), "OpenAI"),
+    safeCall(() => callClaude(buildPrompt("Claude", mode, userInput)), "Claude"),
+    safeCall(() => callGemini(buildPrompt("Gemini", mode, userInput)), "Gemini"),
+    safeCall(() => callGroq(buildPrompt("Groq", mode, userInput)), "Groq"),
+    safeCall(() => callPerplexity(buildPrompt("Perplexity", mode, userInput)), "Perplexity"),
+    safeCall(() => callCohere(buildPrompt("Cohere", mode, userInput)), "Cohere"),
+    safeCall(() => callMistral(buildPrompt("Mistral", mode, userInput)), "Mistral")
   ]);
   const final = await callJarvis(results);
   res.json({
+    mode: mode,
     raw: results,
-    final: final,
+    final: final
   });
 });
 /**
@@ -224,5 +248,5 @@ app.post("/webhook", async (req, res) => {
  */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 AI七福神 起動: ${PORT}`);
+  console.log(`🚀 モード対応AI七福神 起動: ${PORT}`);
 });
