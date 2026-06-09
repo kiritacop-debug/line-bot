@@ -1,299 +1,212 @@
-require("dotenv").config();
-const express = require("express");
-const axios = require("axios");
-const fs = require("fs");
-
+import express from "express";
+import fetch from "node-fetch";
+import dotenv from "dotenv";
+dotenv.config();
 const app = express();
 app.use(express.json());
-
 /**
- * =========================================================
+ * ============================
  * 共通ユーティリティ
- * =========================================================
+ * ============================
  */
-
-const safe = async (fn) => {
+// 安全実行（落ちても全体止めない）
+const safeCall = async (fn, name) => {
   try {
     return await fn();
   } catch (e) {
-    console.error("API ERROR:", e.response?.data || e.message);
-    return "";
+    console.log(`❌ ${name} skipped:`, e.message);
+    return null;
   }
 };
-
-const withTimeout = (promise, ms = 10000) => {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("timeout")), ms)
-    ),
-  ]);
+// APIキー存在チェック
+const hasKey = (key) => {
+  return key && key !== "undefined" && key !== "";
 };
-
-const cache = new Map();
-const getCache = (key) => cache.get(key);
-const setCache = (key, value) => cache.set(key, value);
-
-const saveLog = (input, output) => {
-  const log = `
-[${new Date().toISOString()}]
-INPUT:
-${input}
-
-OUTPUT:
-${output}
-`;
-  fs.appendFileSync("logs.txt", log);
-};
-
-const createPrompt = (role, input) => `
-あなたは以下の専門家です：
-${role}
-
-テーマ：
-${input}
-
-条件：
-・結論を最初に述べる
-・理由は3つ以内
-・実行案を必ず提示
-`;
-
-const roles = {
-  openai: "経営戦略の総責任者",
-  claude: "論理・リスク分析の専門家",
-  gemini: "大局分析・長期トレンドの専門家"
-};
-
 /**
- * =========================================================
- * Slack Event API（無限ループ防止）
- * =========================================================
+ * ============================
+ * 各AI呼び出し（7神）
+ * ============================
  */
-app.post("/slack/events", async (req, res) => {
-  const body = req.body;
-
-  if (body.type === "url_verification") {
-    return res.send({ challenge: body.challenge });
-  }
-
-  if (!body.event) return res.sendStatus(200);
-
-  const event = body.event;
-
-  if (
-    event.bot_id ||
-    event.subtype === "bot_message" ||
-    !event.text
-  ) {
-    return res.sendStatus(200);
-  }
-
-  const userMessage = event.text;
-
-  const cached = getCache(userMessage);
-  if (cached) {
-    await sendToSlack(cached);
-    return res.sendStatus(200);
-  }
-
-  await sendToSlack("🧠 AI合議中（OpenAI + Claude + Gemini）...");
-
-  try {
-    // ⚙️ 修正箇所：Gemini（callGemini）も並列で同時に叩き起こす
-    const [openai, claude, gemini] = await Promise.all([
-      callOpenAI(userMessage),
-      callClaude(userMessage),
-      callGemini(userMessage),
-    ]);
-
-    // ⚙️ 修正箇所：3人の見解をすべて1つの書類にガッチャンコする
-    const combined = `
-【戦略（OpenAI）】
-${openai || "不参加"}
-
-【論理（Claude）】
-${claude || "不参加"}
-
-【大局（Gemini）】
-${gemini || "不参加"}
-`;
-
-    const finalReport = await callFinalSummarizer(combined);
-
-    setCache(userMessage, finalReport);
-    saveLog(userMessage, finalReport);
-
-    await sendToSlack(`📊 *AI合議制 上申書（3傑体制）*\n\n${finalReport}`);
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.error(err);
-    await sendToSlack("⚠️ エラーが発生しました");
-    res.sendStatus(500);
-  }
-});
-
-/**
- * =========================================================
- * Slack送信
- * =========================================================
- */
-const sendToSlack = async (text) => {
-  await axios.post(process.env.SLACK_WEBHOOK_URL, {
-    text,
-  });
-};
-
-/**
- * =========================================================
- * AI呼び出し
- * =========================================================
- */
-
-// OpenAI
-const callOpenAI = (input) =>
-  safe(() =>
-    withTimeout(
-      axios.post(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          model: "gpt-4o",
-          temperature: 0.7,
-          messages: [
-            {
-              role: "user",
-              content: createPrompt(roles.openai, input),
-            },
-          ],
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-        }
-      ),
-      8000
-    ).then((res) => res.data.choices[0].message.content)
-  );
-
-// Claude
-const callClaude = (input) =>
-  safe(() =>
-    withTimeout(
-      axios.post(
-        "https://api.anthropic.com/v1/messages",
-        {
-          model: "claude-3-5-sonnet-20240620",
-          max_tokens: 1000,
-          messages: [
-            {
-              role: "user",
-              content: createPrompt(roles.claude, input),
-            },
-          ],
-        },
-        {
-          headers: {
-            "x-api-key": process.env.ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-          },
-        }
-      ),
-      8000
-    ).then((res) => res.data.content?.[0]?.text || "")
-  );
-
-// ⚙️ 新規追加：Gemini（AQキーを使用する公式通信処理）
-const callGemini = (input) =>
-  safe(() =>
-    withTimeout(
-      axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
-        {
-          contents: [
-            {
-              parts: [
-                {
-                  text: createPrompt(roles.gemini, input),
-                },
-              ],
-            },
-          ],
-        },
-        {
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      ),
-      8000
-    ).then((res) => res.data.candidates?.[0]?.content?.parts?.[0]?.text || "")
-  );
-
-/**
- * =========================================================
- * 最終統合
- * =========================================================
- */
-const callFinalSummarizer = async (input) => {
-  const res = await axios.post(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      model: "gpt-4o",
-      temperature: 0.5,
-      messages: [
-        {
-          role: "system",
-          content:
-            "あなたはCEOの参謀です。提出された各AI専門家の見解（OpenAI、Claude、Gemini）を厳密に査読し、必ず1つの意思決定にまとめてください。回答内で、それぞれのAIがどのような視点をもたらしたかも軽く言及してください。",
-        },
-        {
-          role: "user",
-          content: `
-以下を統合してください：
-
-${input}
-
-出力形式：
-① 結論
-② 採用戦略（1つ）
-③ 各AIブレインの見解要約（OpenAI、Claude、Geminiの3人分）
-④ 理由
-⑤ リスクと対策
-⑥ 明日のアクション（3つ）
-`,
-        },
-      ],
+// ① OpenAI
+const callOpenAI = async (prompt) => {
+  if (!hasKey(process.env.OPENAI_API_KEY)) return null;
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
     },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || null;
+};
+// ② Claude
+const callClaude = async (prompt) => {
+  if (!hasKey(process.env.ANTHROPIC_API_KEY)) return null;
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": process.env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "claude-3-haiku-20240307",
+      max_tokens: 1000,
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+  const data = await res.json();
+  return data.content?.[0]?.text || null;
+};
+// ③ Gemini
+const callGemini = async (prompt) => {
+  if (!hasKey(process.env.GEMINI_API_KEY)) return null;
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
     {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }]
+      })
     }
   );
-
-  return res.data.choices[0].message.content;
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
 };
-
+// ④ Groq
+const callGroq = async (prompt) => {
+  if (!hasKey(process.env.GROQ_API_KEY)) return null;
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "llama3-70b-8192",
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || null;
+};
+// ⑤ Perplexity
+const callPerplexity = async (prompt) => {
+  if (!hasKey(process.env.PERPLEXITY_API_KEY)) return null;
+  const res = await fetch("https://api.perplexity.ai/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.PERPLEXITY_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "sonar-medium-chat",
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || null;
+};
+// ⑥ Cohere
+const callCohere = async (prompt) => {
+  if (!hasKey(process.env.COHERE_API_KEY)) return null;
+  const res = await fetch("https://api.cohere.ai/v1/generate", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.COHERE_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "command",
+      prompt: prompt,
+      max_tokens: 500
+    })
+  });
+  const data = await res.json();
+  return data.generations?.[0]?.text || null;
+};
+// ⑦ Mistral
+const callMistral = async (prompt) => {
+  if (!hasKey(process.env.MISTRAL_API_KEY)) return null;
+  const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${process.env.MISTRAL_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "mistral-medium",
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || null;
+};
 /**
- * =========================================================
- * 既存Webhook保護
- * =========================================================
+ * ============================
+ * ジャービス（最終統合エンジン）
+ * ============================
  */
-app.post("/webhook", (req, res) => {
-  res.sendStatus(200);
+const callJarvis = async (inputs) => {
+  const validInputs = inputs.filter(Boolean).join("\n\n---\n\n");
+  const prompt = `
+あなたは「経営参謀ジャービス」です。
+以下は複数のAI専門家の意見です。
+それぞれ視点・強みが異なります。
+【絶対ルール】
+・単なる要約は禁止
+・箇条書き並べは禁止
+・意見の“良い部分だけを抽出し融合”すること
+・矛盾があれば最も合理的なものを採用
+・最終的に「1つの実行戦略」に統合する
+【目的】
+おっとり新町店の売上・利益を最大化する
+“即実行可能な必勝戦略”を作ること
+【出力形式】
+① 結論（最重要戦略）
+② なぜそれが最適か（統合理由）
+③ 具体的アクション（今日からできるレベル）
+④ 中長期の伸ばし方
+【専門家の意見】
+${validInputs}
+`;
+  return await callOpenAI(prompt);
+};
+/**
+ * ============================
+ * メイン処理
+ * ============================
+ */
+app.post("/webhook", async (req, res) => {
+  const userMessage = req.body.message || "テスト質問";
+  const prompt = `飲食店経営の観点で回答してください:\n${userMessage}`;
+  const results = await Promise.all([
+    safeCall(() => callOpenAI(prompt), "OpenAI"),
+    safeCall(() => callClaude(prompt), "Claude"),
+    safeCall(() => callGemini(prompt), "Gemini"),
+    safeCall(() => callGroq(prompt), "Groq"),
+    safeCall(() => callPerplexity(prompt), "Perplexity"),
+    safeCall(() => callCohere(prompt), "Cohere"),
+    safeCall(() => callMistral(prompt), "Mistral")
+  ]);
+  const final = await callJarvis(results);
+  res.json({
+    raw: results,
+    final: final
+  });
 });
-
 /**
- * =========================================================
+ * ============================
  * 起動
- * =========================================================
+ * ============================
  */
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🔥 AI合議制サーバー起動: ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
